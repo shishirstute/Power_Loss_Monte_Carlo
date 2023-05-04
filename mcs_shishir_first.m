@@ -2,20 +2,25 @@
 % Date : April 16, 2023
 
 %% Scenario generation required for Monte Carlo simulations
-tic
+tic;
 clc;
-clear;
+clear all;
 
 %seed for reproducibility
 rng(2);
-testcase = 14; % 14 for 14 bus system, 123 for 123 bus system
-%Loading given type test case data from matpower
-
+testcase = 118; % 14 for 14 bus system, 123 for 123 bus system
+%% Loading given type test case data from matpower
 case_name = strcat('case',num2str(testcase));
 if testcase ~= 123
 
     mpc = loadcase(case_name);
+    
 end
+
+% after economic dispatch with dc opf
+result=dcopf(case_name);
+Active_Supply = zeros(1,testcase); %equal to number of bus
+Active_Supply(result.gen(:,1))=result.gen(:,2);
 
 CL_Flag = 1; % 1 for critical load inclusion , 0 for not inclusion
 
@@ -49,10 +54,24 @@ else
     Line_Data = mpc.branch;
     
     Harden_Lines = [];  % index of hardened lines
-    %getting source node information
-    Source = mpc.gen(:,1)'; % source node number
+
+    %% getting source node information
     
-    %loading Load data
+    Source = mpc.gen(:,1)'; % source node number, total sources are considered
+
+    % if swing bus is considered only
+  % if testcase==14
+  %       Source = [1];
+  %   elseif testcase==39
+  %       Source=[31];
+  %   elseif testcase==118
+  %       Source=[69];
+  %   end
+
+      
+       
+    
+    %% loading Load data
     
     Load_Data = mpc.bus;
     Active_Demand = Load_Data(:,3); % column 3 contains active load
@@ -73,12 +92,13 @@ n_monte = 1000; % number of monte carlo trials
 %loading failure probability table
 %FP(49*1) contains 49 samples of wind speed with corresponding failure probability
 
-load fp
+%load fp
+load fp_modified
 Fail_prob = FP; 
 %%
 for f=1:length(Fail_prob)  % for each wind speed
     %%
-    failed_num = Fail_prob(f)*n_monte; % failed_num is number of failed outcomes out of n_monte total outcomes for that line
+    failed_num = round(Fail_prob(f)*n_monte); % failed_num is number of failed outcomes out of n_monte total outcomes for that line
 
     % defining matrix that contains status of line for all scenarios (montecarlo trials) of each wind speed
     X = ones(n_monte,n_lines);  % 1 denotes healthy status
@@ -119,9 +139,10 @@ for f=1:length(Fail_prob)  % for each wind speed
         %%
         Failure = find(0==X(k,:)); % returns index of line which is failed for that trial
         Failure = setdiff(Failure,Harden_Lines); % remove hardened lines from failures as they are assumed not to be failed
-        Power_Loss = Loss_Calculation(Failure,fr,to,Source, Active_Demand, edges);
+        Power_Loss = Loss_Calculation(Failure,fr,to,Source, Active_Demand, edges,Active_Supply);
         Damage_Power(k,f) = Power_Loss;  %contains power loss for each trial for each wind speed
         Damage_Line{k,f} = Failure; % contains damage line index for each trial for each wind speed
+        
         
     
     end
@@ -129,14 +150,25 @@ for f=1:length(Fail_prob)  % for each wind speed
     Average_Loss(f) = mean(Damage_Power(:,f)); % average loss for each wind speed
     % for checking 
     f
-    %if f == 1
-       % break;
-    %end
+    % if f == 1
+    %     break;
+    % end
 
 
    
 
 end
+
+%% scenario selection
+fail_scenario = {}; %contains selected scenario
+loss_final = []; %contains loss associated with selected scenario
+Damage_Power1 = num2cell(Damage_Power);
+[fail_scenario, loss_final] = scenario_selection2(Damage_Power1,...  %scenario_selection2 for non zerro type selection
+   Average_Loss, Damage_Line, fail_scenario);
+%just for column representation
+Average_Loss=Average_Loss';
+loss_final=loss_final';
+
 toc;
     
     
@@ -144,13 +176,14 @@ toc;
 % This function takes Failed line index and returns the loss value due to
 % such scenario
 
-function [Power_Loss] = Loss_Calculation(Failure,fr,to,Source, Active_Demand, edges)
+function [Power_Loss] = Loss_Calculation(Failure,fr,to,Source, Active_Demand, edges,Active_Supply)
+    
     
     G = graph(fr,to); % create graph using from and to nodes data
     
      % Finding list of total nodes present in system
-     Nodes_All = [];
-     for s = Source
+    Nodes_All = [];
+    for s = Source
         Nodes_All = [Nodes_All; dfsearch(G,s)];
     end
     
@@ -183,11 +216,19 @@ function [Power_Loss] = Loss_Calculation(Failure,fr,to,Source, Active_Demand, ed
     
     Nodes_Missing = setdiff(Nodes_All, Nodes_Healthy);
     
-    %Calculating Power loss
+    %Calculating Power loss from offline nodes
     
-    Power_Loss = sum(Active_Demand(Nodes_Missing));
+    Power_Loss_Offline = sum(Active_Demand(Nodes_Missing));
+
+    %calculating power loss due to load shedd
+    Power_Loss_Loadshed = load_shedding(G,Source,Active_Demand,Active_Supply);
+
+    %calculating total loss
+    Power_Loss = Power_Loss_Offline + Power_Loss_Loadshed;
     
 end
+
+
 
 
      
