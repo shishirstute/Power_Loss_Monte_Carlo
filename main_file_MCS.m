@@ -8,23 +8,22 @@ clear all;
 
 %seed for reproducibility
 rng(2);
-testcase = 118; % 14 for 14 bus system, 123 for 123 bus system
-%% Loading given type test case data from matpower
-case_name = strcat('case',num2str(testcase));
-if testcase ~= 123
+case_name = 'case_RTS_GMLC';
 
-    mpc = loadcase(case_name);
+%% Loading given type test case data from matpower
+
+mpc = loadcase(case_name);
     
-end
 
 % after economic dispatch with dc opf
 result=dcopf(case_name);
-Active_Supply = zeros(1,testcase); %equal to number of bus
-Active_Supply(result.gen(:,1))=result.gen(:,2);
+%Active_Supply = zeros(1,testcase); %equal to number of bus
+%Active_Supply(result.gen(:,1))=result.gen(:,2);
+ Active_Supply = result.gen(:,[1 2]); % column 1 contains bus number and 2 contains generators
 
 CL_Flag = 1; % 1 for critical load inclusion , 0 for not inclusion
 
-if testcase == 123   % this is separated because we have manually added file for 123 case
+if case_name == case123   % this is separated because we have manually added file for 123 case
 
     %loading line data
       
@@ -58,6 +57,7 @@ else
     %% getting source node information
     
     Source = mpc.gen(:,1)'; % source node number, total sources are considered
+    Source = unique(Source); % one node may contains many sources
 
     % if swing bus is considered only
   % if testcase==14
@@ -74,14 +74,14 @@ else
     %% loading Load data
     
     Load_Data = mpc.bus;
-    Active_Demand = Load_Data(:,3); % column 3 contains active load
+    Active_Demand = Load_Data(:,[1 3]); % column 3 contains active load
     
     % giving more value to critical load
     if CL_Flag == 1
         CL = []; % nodes where critical loads are located
         Active_Demand(CL) = Active_Demand(CL)*10; % weightage of 10 is given for CL
     end
-    n_lines = length(Line_Data);
+    n_lines = length(Line_Data(:,1));
 end
 
 
@@ -130,8 +130,8 @@ for f=1:length(Fail_prob)  % for each wind speed
       %Lets sort 'to' node list in ascending order and assign line index  from top to bottom. For eg, lowest number to node will have line index 1 
       % and goes on increasing with increase of number assigned to 'to' node
       % and create a edge storing fr and to nodes
-    [~,ind] = sort(to);
-    edges = [fr(ind) to(ind)];   
+    %[~,ind] = sort(to);
+    edges = [fr to];   
     %%
     %run monte carlo trials for loss finding
     
@@ -147,7 +147,6 @@ for f=1:length(Fail_prob)  % for each wind speed
     
     end
     
-    Average_Loss(f) = mean(Damage_Power(:,f)); % average loss for each wind speed
     % for checking 
     f
     % if f == 1
@@ -160,14 +159,12 @@ for f=1:length(Fail_prob)  % for each wind speed
 end
 
 %% scenario selection
-fail_scenario = {}; %contains selected scenario
-loss_final = []; %contains loss associated with selected scenario
-Damage_Power1 = num2cell(Damage_Power);
-[fail_scenario, loss_final] = scenario_selection2(Damage_Power1,...  %scenario_selection2 for non zerro type selection
-   Average_Loss, Damage_Line, fail_scenario);
-%just for column representation
-Average_Loss=Average_Loss';
-loss_final=loss_final';
+%Damage_Power1 = num2cell(Damage_Power);
+
+[Fail_Scenario, Representative_Loss, Selected_Loss_Vector]= Scenario_Selection_Setup(Damage_Power,Damage_Line);
+
+%[fail_scenario, loss_final] = scenario_selection2(Damage_Power1,...  %scenario_selection2 for non zerro type selection
+ %  Average_Loss, Damage_Line, fail_scenario);
 
 toc;
     
@@ -217,11 +214,11 @@ function [Power_Loss] = Loss_Calculation(Failure,fr,to,Source, Active_Demand, ed
     Nodes_Missing = setdiff(Nodes_All, Nodes_Healthy);
     
     %Calculating Power loss from offline nodes
-    
-    Power_Loss_Offline = sum(Active_Demand(Nodes_Missing));
+    indices = ismember(Active_Demand(:,1), Nodes_Missing); % returns logical value 1 to those nodes which are missing
+    Power_Loss_Offline = sum(Active_Demand(indices,2));
 
     %calculating power loss due to load shedd
-    Power_Loss_Loadshed = load_shedding(G,Source,Active_Demand,Active_Supply);
+    Power_Loss_Loadshed = load_shedding1(G,Source,Active_Demand,Active_Supply);
 
     %calculating total loss
     Power_Loss = Power_Loss_Offline + Power_Loss_Loadshed;
